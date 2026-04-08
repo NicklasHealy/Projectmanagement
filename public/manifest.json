@@ -1,0 +1,12 @@
+{
+  "name": "Sammen om Norddjurs – Budget 2027",
+  "short_name": "Budget 2027",
+  "description": "Projektoverblik og opgavestyring",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1D3E47",
+  "theme_color": "#1D3E47",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
