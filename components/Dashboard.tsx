@@ -73,6 +73,25 @@ export default function Dashboard() {
     }).catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Poll Excel-filen hvert 30. sekund for eksterne ændringer
+  useEffect(() => {
+    if (!fileHandle) return;                          // Ingen fil linket → stop
+
+    const interval = setInterval(async () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const perm = await (fileHandle as any).queryPermission({ mode: "readwrite" });
+        if (perm !== "granted") return;               // Tilladelse trukket tilbage → skip
+
+        const data = await readFromHandle(fileHandle);
+        setTasks(data.tasks);
+        setMilestones(data.milestones);
+      } catch { /* fil kan være slettet/låst */ }
+    }, 30_000);                                       // 30.000 ms = 30 sekunder
+
+    return () => clearInterval(interval);             // Cleanup når fileHandle ændres
+  }, [fileHandle]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Auto-gem ved ændringer (debounce 800ms)
   useEffect(() => {
     if (!fileHandle) return;
@@ -85,6 +104,9 @@ export default function Dashboard() {
     }, 800);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
   }, [tasks, milestones, fileHandle]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  
+
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -112,6 +134,7 @@ export default function Dashboard() {
   const unlinkFile = async () => {
     await clearHandle();
     setFileHandle(null);
+    window.location.reload();
   };
 
   const total = tasks.length;
