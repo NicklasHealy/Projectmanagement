@@ -16,7 +16,10 @@ const C = {
 
 const MS_PER_DAY = 86400000;
 function toMs(s: string) { return s ? new Date(s).getTime() : null; }
-type ViewType = "tasks" | "timeline" | "milestones";
+function parseOwners(owner: string): string[] {
+  return owner.split(";").map(s => s.trim()).filter(Boolean);
+}
+type ViewType = "tasks" | "timeline" | "milestones" | "owners";
 
 const LANE_H = 28;
 const LANE_PAD = 8;
@@ -49,7 +52,8 @@ export default function Dashboard() {
   const [view, setView]               = useState<ViewType>("tasks");
   const [editTask, setEditTask]       = useState<(Partial<Task> & { id: string }) | null>(null);
   const [editMS, setEditMS]           = useState<(Partial<Milestone> & { id: string }) | null>(null);
-  const [showDoneTl, setShowDoneTl]   = useState(false);
+  const [showDoneTl, setShowDoneTl]       = useState(false);
+  const [selectedOwner, setSelectedOwner] = useState<string>("");
   const [fileHandle, setFileHandle]   = useState<FileSystemFileHandle | null>(null);
   const [autoSaving, setAutoSaving]   = useState(false);
   const [fsaSupported, setFsaSupported] = useState(false);
@@ -235,7 +239,7 @@ export default function Dashboard() {
 
       {/* Tabs */}
       <div style={{ background: "white", borderBottom: `2px solid ${C.mid}`, display: "flex", flexShrink: 0 }}>
-        {([ ["tasks","📋 Opgaver"], ["timeline","📅 Tidslinje"], ["milestones","🏁 Milepæle"] ] as [ViewType, string][]).map(([v, label]) => (
+        {([ ["tasks","📋 Opgaver"], ["timeline","📅 Tidslinje"], ["milestones","🏁 Milepæle"], ["owners","👤 Ansvarlige"] ] as [ViewType, string][]).map(([v, label]) => (
           <button key={v} onClick={() => setView(v)} style={{
             padding: "10px 22px", border: "none", background: "none", cursor: "pointer",
             fontFamily: "inherit", fontSize: 13, fontWeight: 600,
@@ -407,6 +411,123 @@ export default function Dashboard() {
           })}
         </div>
       )}
+
+      {/* ── ANSVARLIGE ── */}
+      {view === "owners" && (() => {
+        // Udled unikke ejere på tværs af alle opgaver
+        const allOwners = [...new Set(tasks.flatMap(t => parseOwners(t.owner)))].sort();
+        // Filtrer opgaver baseret på valgt ejer
+        const filteredTasks = selectedOwner === ""
+          ? tasks.filter(t => parseOwners(t.owner).length > 0)
+          : tasks.filter(t => parseOwners(t.owner).includes(selectedOwner));
+        return (
+          <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+            {/* Sidebar med ejere */}
+            <div style={{ width: 215, background: "white", borderRight: `1px solid ${C.mid}`, overflowY: "auto", flexShrink: 0 }}>
+              {/* "Alle"-knap */}
+              {(() => {
+                const active = selectedOwner === "";
+                const total  = tasks.filter(t => parseOwners(t.owner).length > 0).length;
+                const done   = tasks.filter(t => parseOwners(t.owner).length > 0 && t.done).length;
+                return (
+                  <button onClick={() => setSelectedOwner("")} style={{
+                    width: "100%", textAlign: "left", padding: "11px 14px", border: "none",
+                    background: active ? `${C.teal}12` : "none",
+                    borderLeft: `4px solid ${active ? C.teal : "transparent"}`,
+                    cursor: "pointer", fontFamily: "inherit",
+                  }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: active ? C.teal : C.dark }}>👥 Alle</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                      <div style={{ flex: 1, background: C.mid, borderRadius: 999, height: 4 }}>
+                        <div style={{ width: `${total ? (done / total) * 100 : 0}%`, background: C.teal, height: 4, borderRadius: 999 }} />
+                      </div>
+                      <span style={{ fontSize: 10, color: C.muted }}>{done}/{total}</span>
+                    </div>
+                  </button>
+                );
+              })()}
+              {/* En knap per ejer */}
+              {allOwners.map(owner => {
+                const ownerTasks = tasks.filter(t => parseOwners(t.owner).includes(owner));
+                const ownerDone  = ownerTasks.filter(t => t.done).length;
+                const active     = selectedOwner === owner;
+                return (
+                  <button key={owner} onClick={() => setSelectedOwner(owner)} style={{
+                    width: "100%", textAlign: "left", padding: "11px 14px", border: "none",
+                    background: active ? `${C.teal}12` : "none",
+                    borderLeft: `4px solid ${active ? C.teal : "transparent"}`,
+                    cursor: "pointer", fontFamily: "inherit",
+                  }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: active ? C.teal : C.dark }}>👤 {owner}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                      <div style={{ flex: 1, background: C.mid, borderRadius: 999, height: 4 }}>
+                        <div style={{ width: `${ownerTasks.length ? (ownerDone / ownerTasks.length) * 100 : 0}%`, background: C.teal, height: 4, borderRadius: 999 }} />
+                      </div>
+                      <span style={{ fontSize: 10, color: C.muted }}>{ownerDone}/{ownerTasks.length}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Opgaver grupperet per track */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px" }}>
+              {filteredTasks.length === 0 && (
+                <div style={{ textAlign: "center", color: C.muted, marginTop: 48, fontSize: 13 }}>Ingen opgaver fundet.</div>
+              )}
+              {TRACK_META.map(t => {
+                const trackTasks = filteredTasks
+                  .filter(task => task.track === t.id)
+                  .sort((a, b) => {
+                    if (a.done !== b.done) return a.done ? 1 : -1;
+                    if (!a.deadline && !b.deadline) return 0;
+                    if (!a.deadline) return 1;
+                    if (!b.deadline) return -1;
+                    return a.deadline < b.deadline ? -1 : 1;
+                  });
+                if (!trackTasks.length) return null;
+                return (
+                  <div key={t.id} style={{ marginBottom: 20 }}>
+                    {/* Track-header */}
+                    <div style={{ fontSize: 12, fontWeight: 700, color: t.color, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                      <span>{t.icon} {t.label}</span>
+                      <span style={{ fontSize: 11, color: C.muted, fontWeight: 400 }}>({trackTasks.length})</span>
+                    </div>
+                    {trackTasks.map(task => (
+                      <div key={task.id} onClick={() => setEditTask(task)} style={{
+                        display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 14px",
+                        marginBottom: 7, background: "white", borderRadius: 8,
+                        border: `1px solid ${task.done ? t.color + "55" : C.mid}`,
+                        opacity: task.done ? 0.6 : 1, transition: "opacity 0.2s",
+                        cursor: "pointer",
+                      }}>
+                        <button onClick={e => { e.stopPropagation(); toggleTask(task.id); }} style={{
+                          width: 20, height: 20, borderRadius: 4, border: `2px solid ${task.done ? t.color : "#bbb"}`,
+                          background: task.done ? t.color : "white", flexShrink: 0, marginTop: 1,
+                          cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                        }}>
+                          {task.done && <span style={{ color: "white", fontSize: 11, fontWeight: 700 }}>✓</span>}
+                        </button>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 13, color: C.dark, textDecoration: task.done ? "line-through" : "none", lineHeight: 1.45 }}>{task.text}</div>
+                          <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                            {/* Ejere som individuelle pills */}
+                            {parseOwners(task.owner).map(o => (
+                              <span key={o} style={{ fontSize: 11, background: o === selectedOwner ? `${C.teal}18` : C.light, color: o === selectedOwner ? C.teal : C.muted, borderRadius: 4, padding: "1px 6px" }}>👤 {o}</span>
+                            ))}
+                            {task.deadline && <span style={{ fontSize: 11, color: C.bordeaux, fontWeight: 600 }}>⏰ {new Date(task.deadline).toLocaleDateString("da-DK", { day: "numeric", month: "short" })}</span>}
+                          </div>
+                        </div>
+                        <button onClick={() => setEditTask(task)} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 14, padding: "2px 5px" }}>✏️</button>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {editTask && (
         <TaskModal task={editTask}
