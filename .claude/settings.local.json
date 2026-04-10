@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm uninstall:*)",
+      "Bash(npm run:*)",
+      "Bash(npm install:*)",
+      "Bash(npm test:*)",
+      "Bash(python3 -c \"import openpyxl; print\\('ok'\\)\")",
+      "Bash(python -c \"import openpyxl; print\\('ok'\\)\")",
+      "Bash(python3)",
+      "Bash(python)"
+    ]
+  }
+}

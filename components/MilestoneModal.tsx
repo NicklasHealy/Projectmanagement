@@ -1,25 +1,24 @@
 "use client";
 import { useState } from "react";
-import { Milestone } from "@/lib/types";
-import { TRACK_META } from "@/lib/data";
+import { Milestone, TrackMeta } from "@/lib/types";
 import Modal, { Field, inputCls } from "./Modal";
 
 interface Props {
   ms: Partial<Milestone> & { id: string };
+  tracks: TrackMeta[];
   onSave: (m: Milestone) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
 }
 
-export default function MilestoneModal({ ms, onSave, onDelete, onClose }: Props) {
+export default function MilestoneModal({ ms, tracks, onSave, onDelete, onClose }: Props) {
   const isNew = ms.id === "__new__";
   const [form, setForm] = useState<Milestone>({
     id: ms.id,
-    track: ms.track ?? "digital",
+    track: ms.track ?? tracks[0]?.id ?? "",
     label: ms.label ?? "",
     date: ms.date ?? "",
     done: ms.done ?? false,
-    spId: ms.spId,
   });
   const set = <K extends keyof Milestone>(k: K, v: Milestone[K]) => setForm(f => ({ ...f, [k]: v }));
 
@@ -33,8 +32,8 @@ export default function MilestoneModal({ ms, onSave, onDelete, onClose }: Props)
           <input type="date" className={inputCls} value={form.date} onChange={e => set("date", e.target.value)} />
         </Field>
         <Field label="Spor">
-          <select className={inputCls} value={form.track} onChange={e => set("track", e.target.value as Milestone["track"])}>
-            {TRACK_META.map(t => (
+          <select className={inputCls} value={form.track} onChange={e => set("track", e.target.value)}>
+            {tracks.map(t => (
               <option key={t.id} value={t.id}>{t.icon} {t.label}</option>
             ))}
           </select>

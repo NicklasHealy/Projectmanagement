@@ -1,111 +1,221 @@
 "use client";
-import { useState, useCallback } from "react";
-import { Task, Milestone } from "./types";
-import { INITIAL_TASKS, INITIAL_MILESTONES } from "./data";
-import { ENABLE_SHAREPOINT, ENABLE_MILESTONES } from "./paConfig";
+import { useState, useCallback, useRef, useEffect } from "react";
+import type { Database } from "sql.js";
+import type { Task, Milestone, TrackMeta, Responsible, Project } from "./types";
 import {
-  paGetTasks, paCreateTask, paUpdateTask, paDeleteTask,
-  paGetMilestones, paCreateMilestone, paUpdateMilestone, paDeleteMilestone,
-} from "./powerautomate";
+  getTasks, insertTask, updateTask as dbUpdateTask, deleteTask as dbDeleteTask,
+  getMilestones, insertMilestone, updateMilestone as dbUpdateMilestone, deleteMilestone as dbDeleteMilestone,
+  getTracks, getResponsible, insertResponsible,
+  getProject, saveDatabase,
+  insertTaskNote, deleteTaskNote,
+} from "./sqlite";
+import { saveHandle } from "./fileHandle";
 
-let _nextId = 200;
-function newId() { return `local-${_nextId++}`; }
+const DEBOUNCE_MS = 800;
 
-export function useProjectData() {
-  const [tasks, setTasks]           = useState<Task[]>(INITIAL_TASKS);
-  const [milestones, setMilestones] = useState<Milestone[]>(INITIAL_MILESTONES);
-  const [syncing, setSyncing]       = useState(false);
-  const [syncError, setSyncError]   = useState<string | null>(null);
-  const [synced, setSynced]         = useState(false);
+export function useProjectData(db: Database | null, fileHandle: FileSystemFileHandle | null) {
+  const [tasks, setTasks]             = useState<Task[]>([]);
+  const [milestones, setMilestones]   = useState<Milestone[]>([]);
+  const [tracks, setTracks]           = useState<TrackMeta[]>([]);
+  const [responsible, setResponsible] = useState<Responsible[]>([]);
+  const [project, setProject]         = useState<Project | null>(null);
+  const [autoSaving, setAutoSaving]   = useState(false);
+  const [saveError, setSaveError]     = useState<string | null>(null);
 
-  const syncFromSharePoint = useCallback(async () => {
-    if (!ENABLE_SHAREPOINT) {
-      setSyncError("SharePoint-sync er ikke aktiveret. Udfyld lib/paConfig.ts og sæt ENABLE_SHAREPOINT til true.");
+  const dirtyRef      = useRef(false);
+  const saveTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Load all data from DB when db changes
+  useEffect(() => {
+    if (!db) {
+      setTasks([]); setMilestones([]); setTracks([]); setResponsible([]); setProject(null);
       return;
     }
-    setSyncing(true); setSyncError(null);
-    try {
-      const [spTasks, spMs] = await Promise.all([
-        paGetTasks(),
-        ENABLE_MILESTONES ? paGetMilestones() : Promise.resolve([]),
-      ]);
-      setTasks(spTasks); setMilestones(spMs); setSynced(true);
-    } catch (e: unknown) {
-      setSyncError(e instanceof Error ? e.message : "Ukendt fejl");
-    } finally { setSyncing(false); }
-  }, []);
+    setTasks(getTasks(db));
+    setMilestones(getMilestones(db));
+    setTracks(getTracks(db));
+    setResponsible(getResponsible(db));
+    setProject(getProject(db));
+  }, [db]);
 
-  const addTask = useCallback(async (task: Omit<Task, "id">) => {
-    const newTask: Task = { ...task, id: newId() };
-    setTasks(p => [...p, newTask]);
-    if (ENABLE_SHAREPOINT) {
+  const scheduleSave = useCallback(() => {
+    if (!db || !fileHandle) return;
+    dirtyRef.current = true;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      if (!dirtyRef.current) return;
+      dirtyRef.current = false;
+      setAutoSaving(true);
       try {
-        const spId = await paCreateTask(newTask);
-        setTasks(p => p.map(t => t.id === newTask.id ? { ...t, id: `sp-${spId}`, spId } : t));
-      } catch { /* silent */ }
+        await saveDatabase(db, fileHandle);
+        await saveHandle(fileHandle);
+        setSaveError(null);
+      } catch (e) {
+        setSaveError(e instanceof Error ? e.message : "Gem fejlede");
+      }
+      setAutoSaving(false);
+    }, DEBOUNCE_MS);
+  }, [db, fileHandle]);
+
+  // Gem øjeblikkeligt og annullér eventuel ventende debounce-timer.
+  // Bruges f.eks. ved checkin/Fjern link, så DB gemmes én gang med den
+  // seneste tilstand (inkl. checkin-record) og timeren ikke kører bagefter.
+  const flushAndCancel = useCallback(async () => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    dirtyRef.current = false;
+    if (!db || !fileHandle) return;
+    try {
+      await saveDatabase(db, fileHandle);
+      setSaveError(null);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "Gem fejlede");
     }
-  }, []);
+  }, [db, fileHandle]);
 
-  const updateTask = useCallback(async (task: Task) => {
-    setTasks(p => p.map(t => t.id === task.id ? task : t));
-    if (ENABLE_SHAREPOINT && task.spId) { try { await paUpdateTask(task); } catch { /* silent */ } }
-  }, []);
+  // ---------------------------------------------------------------------------
+  // Responsible
+  // ---------------------------------------------------------------------------
 
-  const deleteTask = useCallback(async (id: string) => {
-    const task = tasks.find(t => t.id === id);
-    setTasks(p => p.filter(t => t.id !== id));
-    if (ENABLE_SHAREPOINT && task?.spId) { try { await paDeleteTask(task.spId); } catch { /* silent */ } }
-  }, [tasks]);
+  const ensureResponsible = useCallback((name: string): Responsible => {
+    if (!db) throw new Error("No database");
+    const existing = getResponsible(db).find(r => r.name.toLowerCase() === name.toLowerCase());
+    if (existing) return existing;
+    const newR = insertResponsible(db, name);
+    setResponsible(getResponsible(db));
+    scheduleSave();
+    return newR;
+  }, [db, scheduleSave]);
+
+  const addResponsible = useCallback((name: string): Responsible => {
+    if (!db) throw new Error("No database");
+    const r = insertResponsible(db, name);
+    setResponsible(getResponsible(db));
+    scheduleSave();
+    return r;
+  }, [db, scheduleSave]);
+
+  const renameResponsible = useCallback((id: string, name: string) => {
+    if (!db) return;
+    db.run("UPDATE responsible SET name=? WHERE id=?", [name, id]);
+    setResponsible(getResponsible(db));
+    // update in-memory tasks
+    setTasks(prev => prev.map(t => ({
+      ...t,
+      owners: t.owners.map(o => o.id === id ? { ...o, name } : o),
+    })));
+    scheduleSave();
+  }, [db, scheduleSave]);
+
+  const removeResponsible = useCallback((id: string) => {
+    if (!db) return;
+    db.run("DELETE FROM responsible WHERE id=?", [id]);
+    setResponsible(getResponsible(db));
+    setTasks(prev => prev.map(t => ({ ...t, owners: t.owners.filter(o => o.id !== id) })));
+    scheduleSave();
+  }, [db, scheduleSave]);
+
+  // ---------------------------------------------------------------------------
+  // Tasks
+  // ---------------------------------------------------------------------------
+
+  const addTask = useCallback((task: Omit<Task, "id">) => {
+    if (!db) return;
+    const newTask: Task = { ...task, id: crypto.randomUUID() };
+    insertTask(db, newTask);
+    setTasks(getTasks(db));
+    setResponsible(getResponsible(db));
+    scheduleSave();
+  }, [db, scheduleSave]);
+
+  const updateTask = useCallback((task: Task) => {
+    if (!db) return;
+    dbUpdateTask(db, task);
+    setTasks(getTasks(db));
+    setResponsible(getResponsible(db));
+    scheduleSave();
+  }, [db, scheduleSave]);
+
+  const deleteTask = useCallback((id: string) => {
+    if (!db) return;
+    dbDeleteTask(db, id);
+    setTasks(getTasks(db));
+    scheduleSave();
+  }, [db, scheduleSave]);
 
   const toggleTask = useCallback((id: string) => {
-    setTasks(p => {
-      const updated = p.map(t => t.id === id ? { ...t, done: !t.done } : t);
-      if (ENABLE_SHAREPOINT) {
-        const task = updated.find(t => t.id === id);
-        if (task?.spId) paUpdateTask(task).catch(() => {});
-      }
-      return updated;
-    });
-  }, []);
+    if (!db) return;
+    const task = getTasks(db).find(t => t.id === id);
+    if (!task) return;
+    dbUpdateTask(db, { ...task, done: !task.done });
+    setTasks(getTasks(db));
+    scheduleSave();
+  }, [db, scheduleSave]);
 
-  const addMilestone = useCallback(async (ms: Omit<Milestone, "id">) => {
-    const newMs: Milestone = { ...ms, id: newId() };
-    setMilestones(p => [...p, newMs]);
-    if (ENABLE_SHAREPOINT && ENABLE_MILESTONES) {
-      try {
-        const spId = await paCreateMilestone(newMs);
-        setMilestones(p => p.map(m => m.id === newMs.id ? { ...m, id: `sp-${spId}`, spId } : m));
-      } catch { /* silent */ }
-    }
-  }, []);
+  const addNote = useCallback((taskId: string, text: string) => {
+    if (!db) return;
+    insertTaskNote(db, taskId, text);
+    setTasks(getTasks(db));
+    scheduleSave();
+  }, [db, scheduleSave]);
 
-  const updateMilestone = useCallback(async (ms: Milestone) => {
-    setMilestones(p => p.map(m => m.id === ms.id ? ms : m));
-    if (ENABLE_SHAREPOINT && ENABLE_MILESTONES && ms.spId) { try { await paUpdateMilestone(ms); } catch { /* silent */ } }
-  }, []);
+  const removeNote = useCallback((noteId: number) => {
+    if (!db) return;
+    deleteTaskNote(db, noteId);
+    setTasks(getTasks(db));
+    scheduleSave();
+  }, [db, scheduleSave]);
 
-  const deleteMilestone = useCallback(async (id: string) => {
-    const ms = milestones.find(m => m.id === id);
-    setMilestones(p => p.filter(m => m.id !== id));
-    if (ENABLE_SHAREPOINT && ENABLE_MILESTONES && ms?.spId) { try { await paDeleteMilestone(ms.spId); } catch { /* silent */ } }
-  }, [milestones]);
+  // ---------------------------------------------------------------------------
+  // Milestones
+  // ---------------------------------------------------------------------------
+
+  const addMilestone = useCallback((ms: Omit<Milestone, "id">) => {
+    if (!db) return;
+    const newMs: Milestone = { ...ms, id: crypto.randomUUID() };
+    insertMilestone(db, newMs);
+    setMilestones(getMilestones(db));
+    scheduleSave();
+  }, [db, scheduleSave]);
+
+  const updateMilestone = useCallback((ms: Milestone) => {
+    if (!db) return;
+    dbUpdateMilestone(db, ms);
+    setMilestones(getMilestones(db));
+    scheduleSave();
+  }, [db, scheduleSave]);
+
+  const deleteMilestone = useCallback((id: string) => {
+    if (!db) return;
+    dbDeleteMilestone(db, id);
+    setMilestones(getMilestones(db));
+    scheduleSave();
+  }, [db, scheduleSave]);
 
   const toggleMilestone = useCallback((id: string) => {
-    setMilestones(p => {
-      const updated = p.map(m => m.id === id ? { ...m, done: !m.done } : m);
-      if (ENABLE_SHAREPOINT && ENABLE_MILESTONES) {
-        const ms = updated.find(m => m.id === id);
-        if (ms?.spId) paUpdateMilestone(ms).catch(() => {});
-      }
-      return updated;
-    });
-  }, []);
+    if (!db) return;
+    const ms = getMilestones(db).find(m => m.id === id);
+    if (!ms) return;
+    dbUpdateMilestone(db, { ...ms, done: !ms.done });
+    setMilestones(getMilestones(db));
+    scheduleSave();
+  }, [db, scheduleSave]);
+
+  // ---------------------------------------------------------------------------
+  // Tracks
+  // ---------------------------------------------------------------------------
+
+  const reloadTracks = useCallback(() => {
+    if (!db) return;
+    setTracks(getTracks(db));
+  }, [db]);
 
   return {
-    tasks, milestones, setTasks, setMilestones,
+    project, tasks, milestones, tracks, responsible, autoSaving, saveError, setSaveError,
+    setTasks, setMilestones,
     addTask, updateTask, deleteTask, toggleTask,
+    addNote, removeNote,
     addMilestone, updateMilestone, deleteMilestone, toggleMilestone,
-    syncFromSharePoint, syncing, syncError, synced,
-    sharepointEnabled: ENABLE_SHAREPOINT,
+    ensureResponsible, addResponsible, renameResponsible, removeResponsible,
+    reloadTracks, flushAndCancel,
   };
 }

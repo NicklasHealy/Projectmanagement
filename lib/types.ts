@@ -1,33 +1,49 @@
-export type TrackId = "digital" | "bus" | "webinar" | "borgermøde" | "kampagne";
+export interface TrackMeta {
+  id: string;
+  label: string;
+  icon: string;
+  color: string;
+  sortOrder: number;
+}
+
+export interface Responsible {
+  id: string;
+  name: string;
+}
 
 export interface TaskNote {
-  ts: string;   // ISO datetime string
+  id: number;
+  taskId: string;
+  ts: string;
   text: string;
 }
 
 export interface Task {
   id: string;
-  track: TrackId;
+  track: string;
   text: string;
-  owner: string;
-  deadline: string;   // ISO date string YYYY-MM-DD or ""
+  owners: Responsible[];
+  deadline: string;
   done: boolean;
   notes?: TaskNote[];
-  spId?: string;      // SharePoint list item ID (when synced)
 }
 
 export interface Milestone {
   id: string;
-  track: TrackId;
+  track: string;
   label: string;
-  date: string;       // ISO date string YYYY-MM-DD or ""
+  date: string;
   done: boolean;
-  spId?: string;
 }
 
-export interface TrackMeta {
-  id: TrackId;
-  label: string;
-  icon: string;
-  color: string;
+export interface Project {
+  name: string;
+  createdAt: string;
+}
+
+export interface Session {
+  id: number;
+  userName: string;
+  checkedOutAt: string;
+  checkedInAt: string | null;
 }

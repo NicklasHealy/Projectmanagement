@@ -1,6 +1,6 @@
 const DB_NAME  = "norddjurs-budget";
 const STORE    = "handles";
-const FILE_KEY = "xlsx-file";
+const FILE_KEY = "db-file";
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {

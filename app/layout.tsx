@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Sammen om Norddjurs – Budget 2027",
+  title: "Projektmanager – Norddjurs Kommune",
   description: "Projektoverblik og opgavestyring",
   manifest: "/manifest.json",
 };
