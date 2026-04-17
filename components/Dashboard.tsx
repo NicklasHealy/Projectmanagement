@@ -59,6 +59,7 @@ export default function Dashboard() {
   const [editMS, setEditMS]                 = useState<(Partial<Milestone> & { id: string }) | null>(null);
   const [showDoneTl, setShowDoneTl]         = useState(false);
   const [selectedOwner, setSelectedOwner]   = useState<string>("");
+  const [groupByTrack, setGroupByTrack]     = useState(true);
   const [showSettings, setShowSettings]     = useState(false);
   const [showSessionLog, setShowSessionLog] = useState(false);
   const [editTrackId, setEditTrackId]       = useState<string | null>(null);
@@ -314,6 +315,15 @@ export default function Dashboard() {
       return a.deadline < b.deadline ? -1 : 1;
     });
 
+  const allTasksSorted = tasks
+    .filter(t => selectedOwner === "" || t.owners.some(o => o.name === selectedOwner))
+    .sort((a, b) => {
+      if (a.done !== b.done) return a.done ? 1 : -1;
+      if (!a.deadline && !b.deadline) return 0;
+      if (!a.deadline) return 1; if (!b.deadline) return -1;
+      return a.deadline < b.deadline ? -1 : 1;
+    });
+
   // Timeline
   const todayStr = new Date().toISOString().slice(0, 10);
   const allDated = [...tasks.filter(t => t.deadline), ...milestones.filter(m => m.date)];
@@ -502,77 +512,156 @@ export default function Dashboard() {
         ))}
       </div>
 
+      {/* ── TASKS toolbar ── */}
+      {view === "tasks" && (
+        <div style={{ background: "white", borderBottom: `1px solid ${C.mid}`, padding: "8px 24px", display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+          <div style={{ display: "flex", border: `1px solid ${C.mid}`, borderRadius: 7, overflow: "hidden" }}>
+            {([[true, "Per spor"], [false, "Alle opgaver"]] as [boolean, string][]).map(([val, label]) => (
+              <button key={String(val)} onClick={() => setGroupByTrack(val)} style={{
+                padding: "5px 14px", border: "none", cursor: "pointer", fontFamily: "inherit",
+                fontSize: 12, fontWeight: 600,
+                background: groupByTrack === val ? C.teal : "none",
+                color: groupByTrack === val ? "white" : C.muted,
+              }}>{label}</button>
+            ))}
+          </div>
+          {!groupByTrack && (
+            <select value={selectedOwner} onChange={e => setSelectedOwner(e.target.value)}
+              style={{ border: `1px solid ${C.mid}`, borderRadius: 6, padding: "5px 9px", fontSize: 12, color: C.dark, background: "white", cursor: "pointer" }}>
+              <option value="">Alle ansvarlige</option>
+              {[...new Set(tasks.flatMap(t => t.owners.map(o => o.name)))].sort().map(name => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+
       {/* ── TASKS ── */}
       {view === "tasks" && (
         <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-          <div style={{ width: 215, background: "white", borderRight: `1px solid ${C.mid}`, overflowY: "auto", flexShrink: 0 }}>
-            {tracks.map(t => {
-              const tt = tasks.filter(x => x.track === t.id);
-              const d  = tt.filter(x => x.done).length;
-              const active = t.id === activeTrack;
-              return (
-                <button key={t.id} onClick={() => setActiveTrack(t.id)} style={{
-                  width: "100%", textAlign: "left", padding: "11px 14px", border: "none",
-                  background: active ? `${t.color}12` : "none",
-                  borderLeft: `4px solid ${active ? t.color : "transparent"}`,
-                  cursor: "pointer", fontFamily: "inherit",
-                }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: active ? t.color : C.dark }}>{t.icon} {t.label}</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-                    <div style={{ flex: 1, background: C.mid, borderRadius: 999, height: 4 }}>
-                      <div style={{ width: `${tt.length ? (d / tt.length) * 100 : 0}%`, background: t.color, height: 4, borderRadius: 999 }} />
+          {groupByTrack && (
+            <div style={{ width: 215, background: "white", borderRight: `1px solid ${C.mid}`, overflowY: "auto", flexShrink: 0 }}>
+              {tracks.map(t => {
+                const tt = tasks.filter(x => x.track === t.id);
+                const d  = tt.filter(x => x.done).length;
+                const active = t.id === activeTrack;
+                return (
+                  <button key={t.id} onClick={() => setActiveTrack(t.id)} style={{
+                    width: "100%", textAlign: "left", padding: "11px 14px", border: "none",
+                    background: active ? `${t.color}12` : "none",
+                    borderLeft: `4px solid ${active ? t.color : "transparent"}`,
+                    cursor: "pointer", fontFamily: "inherit",
+                  }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: active ? t.color : C.dark }}>{t.icon} {t.label}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                      <div style={{ flex: 1, background: C.mid, borderRadius: 999, height: 4 }}>
+                        <div style={{ width: `${tt.length ? (d / tt.length) * 100 : 0}%`, background: t.color, height: 4, borderRadius: 999 }} />
+                      </div>
+                      <span style={{ fontSize: 10, color: C.muted }}>{d}/{tt.length}</span>
                     </div>
-                    <span style={{ fontSize: 10, color: C.muted }}>{d}/{tt.length}</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
-          <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px" }}>
-            {activeTrackMeta && (
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 18 }}>{activeTrackMeta.icon}</span>
-                  <span style={{ fontSize: 16, fontWeight: 700, color: C.dark }}>{activeTrackMeta.label}</span>
-                  <span style={{ fontSize: 12, color: C.muted }}>({currentTasks.length})</span>
+          {groupByTrack ? (
+            <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px" }}>
+              {activeTrackMeta && (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 18 }}>{activeTrackMeta.icon}</span>
+                    <span style={{ fontSize: 16, fontWeight: 700, color: C.dark }}>{activeTrackMeta.label}</span>
+                    <span style={{ fontSize: 12, color: C.muted }}>({currentTasks.length})</span>
+                  </div>
+                  <button
+                    onClick={() => setEditTask({ id: "__new__", track: activeTrack, text: "", owners: [], deadline: "", done: false })}
+                    style={{ padding: "7px 16px", background: activeTrackMeta.color, color: "white", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+                  >+ Tilføj opgave</button>
                 </div>
+              )}
+
+              {currentTasks.length === 0 && (
+                <div style={{ textAlign: "center", color: C.muted, marginTop: 48, fontSize: 13 }}>Ingen opgaver endnu — tilføj din første!</div>
+              )}
+
+              {currentTasks.map(task => (
+                <div key={task.id} onClick={() => setEditTask(task)} style={{
+                  display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 14px",
+                  marginBottom: 7, background: "white", borderRadius: 8,
+                  border: `1px solid ${task.done ? (activeTrackMeta?.color ?? C.teal) + "55" : C.mid}`,
+                  opacity: task.done ? 0.6 : 1, transition: "opacity 0.2s", cursor: "pointer",
+                }}>
+                  <button onClick={e => { e.stopPropagation(); toggleTask(task.id); }} style={{
+                    width: 20, height: 20, borderRadius: 4, border: `2px solid ${task.done ? (activeTrackMeta?.color ?? C.teal) : "#bbb"}`,
+                    background: task.done ? (activeTrackMeta?.color ?? C.teal) : "white", flexShrink: 0, marginTop: 1,
+                    cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>
+                    {task.done && <span style={{ color: "white", fontSize: 11, fontWeight: 700 }}>✓</span>}
+                  </button>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, color: C.dark, textDecoration: task.done ? "line-through" : "none", lineHeight: 1.45 }}>{task.text}</div>
+                    <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                      {task.owners.map(o => <span key={o.id} style={{ fontSize: 11, color: C.muted, background: C.light, borderRadius: 4, padding: "1px 6px" }}>👤 {o.name}</span>)}
+                      {task.deadline && <span style={{ fontSize: 11, color: C.bordeaux, fontWeight: 600 }}>⏰ {new Date(task.deadline).toLocaleDateString("da-DK", { day: "numeric", month: "short" })}</span>}
+                    </div>
+                  </div>
+                  <button onClick={e => { e.stopPropagation(); setEditTask(task); }} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 14, padding: "2px 5px" }}>✏️</button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <span style={{ fontSize: 16, fontWeight: 700, color: C.dark }}>
+                  Alle opgaver <span style={{ fontSize: 12, color: C.muted, fontWeight: 400 }}>({allTasksSorted.length})</span>
+                </span>
                 <button
-                  onClick={() => setEditTask({ id: "__new__", track: activeTrack, text: "", owners: [], deadline: "", done: false })}
-                  style={{ padding: "7px 16px", background: activeTrackMeta.color, color: "white", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+                  onClick={() => setEditTask({ id: "__new__", track: tracks[0]?.id ?? "", text: "", owners: [], deadline: "", done: false })}
+                  style={{ padding: "7px 16px", background: C.teal, color: "white", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}
                 >+ Tilføj opgave</button>
               </div>
-            )}
 
-            {currentTasks.length === 0 && (
-              <div style={{ textAlign: "center", color: C.muted, marginTop: 48, fontSize: 13 }}>Ingen opgaver endnu — tilføj din første!</div>
-            )}
+              {allTasksSorted.length === 0 && (
+                <div style={{ textAlign: "center", color: C.muted, marginTop: 48, fontSize: 13 }}>Ingen opgaver fundet.</div>
+              )}
 
-            {currentTasks.map(task => (
-              <div key={task.id} onClick={() => setEditTask(task)} style={{
-                display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 14px",
-                marginBottom: 7, background: "white", borderRadius: 8,
-                border: `1px solid ${task.done ? (activeTrackMeta?.color ?? C.teal) + "55" : C.mid}`,
-                opacity: task.done ? 0.6 : 1, transition: "opacity 0.2s", cursor: "pointer",
-              }}>
-                <button onClick={e => { e.stopPropagation(); toggleTask(task.id); }} style={{
-                  width: 20, height: 20, borderRadius: 4, border: `2px solid ${task.done ? (activeTrackMeta?.color ?? C.teal) : "#bbb"}`,
-                  background: task.done ? (activeTrackMeta?.color ?? C.teal) : "white", flexShrink: 0, marginTop: 1,
-                  cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
-                }}>
-                  {task.done && <span style={{ color: "white", fontSize: 11, fontWeight: 700 }}>✓</span>}
-                </button>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, color: C.dark, textDecoration: task.done ? "line-through" : "none", lineHeight: 1.45 }}>{task.text}</div>
-                  <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
-                    {task.owners.map(o => <span key={o.id} style={{ fontSize: 11, color: C.muted, background: C.light, borderRadius: 4, padding: "1px 6px" }}>👤 {o.name}</span>)}
-                    {task.deadline && <span style={{ fontSize: 11, color: C.bordeaux, fontWeight: 600 }}>⏰ {new Date(task.deadline).toLocaleDateString("da-DK", { day: "numeric", month: "short" })}</span>}
+              {allTasksSorted.map(task => {
+                const tColor = trackColor(task.track);
+                const tIcon  = trackIcon(task.track);
+                const tLabel = tracks.find(t => t.id === task.track)?.label ?? task.track;
+                return (
+                  <div key={task.id} onClick={() => setEditTask(task)} style={{
+                    display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 14px",
+                    marginBottom: 7, background: "white", borderRadius: 8,
+                    border: `1px solid ${task.done ? tColor + "55" : C.mid}`,
+                    opacity: task.done ? 0.6 : 1, transition: "opacity 0.2s", cursor: "pointer",
+                  }}>
+                    <button onClick={e => { e.stopPropagation(); toggleTask(task.id); }} style={{
+                      width: 20, height: 20, borderRadius: 4, border: `2px solid ${task.done ? tColor : "#bbb"}`,
+                      background: task.done ? tColor : "white", flexShrink: 0, marginTop: 1,
+                      cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                    }}>
+                      {task.done && <span style={{ color: "white", fontSize: 11, fontWeight: 700 }}>✓</span>}
+                    </button>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, color: C.dark, textDecoration: task.done ? "line-through" : "none", lineHeight: 1.45 }}>{task.text}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: tColor, display: "inline-block", flexShrink: 0 }} />
+                        <span style={{ fontSize: 11, color: C.muted }}>{tIcon} {tLabel}</span>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                        {task.owners.map(o => <span key={o.id} style={{ fontSize: 11, color: C.muted, background: C.light, borderRadius: 4, padding: "1px 6px" }}>👤 {o.name}</span>)}
+                        {task.deadline && <span style={{ fontSize: 11, color: C.bordeaux, fontWeight: 600 }}>⏰ {new Date(task.deadline).toLocaleDateString("da-DK", { day: "numeric", month: "short" })}</span>}
+                      </div>
+                    </div>
+                    <button onClick={e => { e.stopPropagation(); setEditTask(task); }} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 14, padding: "2px 5px" }}>✏️</button>
                   </div>
-                </div>
-                <button onClick={e => { e.stopPropagation(); setEditTask(task); }} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 14, padding: "2px 5px" }}>✏️</button>
-              </div>
-            ))}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
