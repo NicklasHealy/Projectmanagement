@@ -182,10 +182,12 @@ export default function Dashboard() {
 
   /** Bekræft brugernavn fra prompt */
   const handleConfirmName = async (override = false) => {
-    const name = nameInput.trim();
+    const name = nameInput.trim() || userName;
     if (!name) return;
-    localStorage.setItem("norddjurs-username", name);
-    setUserName(name);
+    if (nameInput.trim()) {
+      localStorage.setItem("norddjurs-username", nameInput.trim());
+      setUserName(nameInput.trim());
+    }
     setShowNamePrompt(false);
     setNameInput("");
     if (!pendingOpen.current) return;
