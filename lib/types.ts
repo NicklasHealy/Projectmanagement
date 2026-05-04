@@ -25,7 +25,10 @@ export interface Task {
   owners: Responsible[];
   deadline: string;
   done: boolean;
+  url?: string;
   notes?: TaskNote[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface Milestone {

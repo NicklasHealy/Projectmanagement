@@ -21,7 +21,7 @@ const C = {
 
 const MS_PER_DAY = 86400000;
 function toMs(s: string) { return s ? new Date(s).getTime() : null; }
-type ViewType = "tasks" | "timeline" | "milestones" | "owners";
+type ViewType = "tasks" | "timeline" | "milestones" | "owners" | "recent";
 
 const LANE_H = 28;
 const LANE_PAD = 8;
@@ -76,6 +76,9 @@ export default function Dashboard() {
   const [renameResponsibleVal, setRenameResponsibleVal] = useState("");
   const [newResponsibleVal, setNewResponsibleVal] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [liveCheckResult, setLiveCheckResult] = useState<Session[] | null>(null);
+  const [liveCheckLoading, setLiveCheckLoading] = useState(false);
+  const [readOnly, setReadOnly] = useState(false);
 
   // Checkout-state
   const [sessionId, setSessionId]         = useState<number | null>(null);
@@ -164,7 +167,7 @@ export default function Dashboard() {
 
   /** Checkin + gem + ryd state */
   const handleUnlink = async () => {
-    if (db && fileHandle && sessionId !== null) {
+    if (!readOnly && db && fileHandle && sessionId !== null) {
       checkIn(db, sessionId);
       await flushAndCancel(); // gemmer DB (inkl. checkin) og annullerer timer
     }
@@ -174,6 +177,20 @@ export default function Dashboard() {
     setActiveTrack("");
     setSessionId(null);
     setOccupiedBy(null);
+    setReadOnly(false);
+    setNeedsPermission(false);
+  };
+
+  /** Åbn i læsetilstand — ingen checkout, ingen auto-save */
+  const handleOpenReadOnly = () => {
+    if (!pendingOpen.current) return;
+    const { database, handle } = pendingOpen.current;
+    pendingOpen.current = null;
+    migrateDatabase(database);
+    setDb(database);
+    setFileHandle(handle);
+    setOccupiedBy(null);
+    setReadOnly(true);
     setNeedsPermission(false);
   };
 
@@ -185,6 +202,21 @@ export default function Dashboard() {
       const database = await openDatabase(fileHandle);
       await openWithName(database, fileHandle);
     } catch { /* bruger annullerede */ }
+  };
+
+  const handleLiveCheck = async () => {
+    if (!fileHandle) return;
+    setLiveCheckLoading(true);
+    setLiveCheckResult(null);
+    try {
+      const freshDb = await openDatabase(fileHandle);
+      const active = getSessionLog(freshDb).filter(s => !s.checkedInAt);
+      freshDb.close();
+      setLiveCheckResult(active);
+    } catch {
+      setLiveCheckResult([]);
+    }
+    setLiveCheckLoading(false);
   };
 
   /** Bekræft brugernavn fra prompt */
@@ -281,23 +313,29 @@ export default function Dashboard() {
             <strong style={{ color: C.dark }}>{occupiedBy.userName}</strong> checkede ud {since}.
           </p>
           <p style={{ color: C.muted, fontSize: 12, marginBottom: 28 }}>
-            Vent til vedkommende checker ind igen, eller åbn alligevel (risiko for at overskrive hinandens ændringer).
+            Vent til vedkommende checker ind igen, åbn i læsetilstand for at se data uden at ændre noget, eller åbn alligevel (risiko for at overskrive hinandens ændringer).
           </p>
-          <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <button
-              onClick={() => { setOccupiedBy(null); pendingOpen.current = null; }}
-              style={{ flex: 1, padding: "10px", background: "#fff", color: C.dark, border: `1px solid ${C.mid}`, borderRadius: 8, fontWeight: 600, cursor: "pointer" }}
+              onClick={handleOpenReadOnly}
+              style={{ padding: "10px", background: C.teal, color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, cursor: "pointer" }}
             >
-              Gå tilbage
+              👁 Åbn som læser
             </button>
             <button
               onClick={() => {
                 if (!nameInput && !userName) { setShowNamePrompt(true); return; }
                 handleConfirmName(true);
               }}
-              style={{ flex: 1, padding: "10px", background: C.bordeaux, color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, cursor: "pointer" }}
+              style={{ padding: "10px", background: C.bordeaux, color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, cursor: "pointer" }}
             >
               Åbn alligevel
+            </button>
+            <button
+              onClick={() => { setOccupiedBy(null); pendingOpen.current = null; }}
+              style={{ padding: "10px", background: "#fff", color: C.dark, border: `1px solid ${C.mid}`, borderRadius: 8, fontWeight: 600, cursor: "pointer" }}
+            >
+              Gå tilbage
             </button>
           </div>
         </div>
@@ -349,6 +387,27 @@ export default function Dashboard() {
 
   const trackColor = (trackId: string) => tracks.find(t => t.id === trackId)?.color ?? C.teal;
   const trackIcon  = (trackId: string) => tracks.find(t => t.id === trackId)?.icon ?? "📋";
+  const urlHost = (url: string) => { try { return new URL(url).hostname; } catch { return url; } };
+
+  const yesterdayDate = new Date(Date.now() - MS_PER_DAY).toISOString().slice(0, 10);
+  const recentTasks = [...tasks]
+    .filter(t => t.updatedAt || t.createdAt)
+    .sort((a, b) => {
+      const ta = a.updatedAt ?? a.createdAt ?? "";
+      const tb = b.updatedAt ?? b.createdAt ?? "";
+      return tb.localeCompare(ta);
+    })
+    .slice(0, 30);
+  const groupedRecent: { dateLabel: string; tasks: typeof recentTasks }[] = [];
+  for (const task of recentTasks) {
+    const dateKey = (task.updatedAt ?? task.createdAt ?? "").slice(0, 10);
+    const label = dateKey === todayStr ? "I dag"
+      : dateKey === yesterdayDate ? "I går"
+      : new Date(dateKey).toLocaleDateString("da-DK", { day: "numeric", month: "long" });
+    const last = groupedRecent[groupedRecent.length - 1];
+    if (last && last.dateLabel === label) last.tasks.push(task);
+    else groupedRecent.push({ dateLabel: label, tasks: [task] });
+  }
 
   const inputStyle: React.CSSProperties = {
     border: `1px solid ${C.mid}`, borderRadius: 6, padding: "5px 9px",
@@ -380,13 +439,14 @@ export default function Dashboard() {
               </span>
             )}
             {!autoSaving && !saveError && fileHandle && <span style={{ fontSize: 11, color: "rgba(255,255,255,0.45)" }}>📄 {fileHandle.name}</span>}
-            {userName && <span style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", background: "rgba(255,255,255,0.08)", borderRadius: 5, padding: "3px 8px" }}>👤 {userName}</span>}
+            {userName && !readOnly && <span style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", background: "rgba(255,255,255,0.08)", borderRadius: 5, padding: "3px 8px" }}>👤 {userName}</span>}
+            {readOnly && <span style={{ fontSize: 11, background: C.yellow, color: C.dark, borderRadius: 5, padding: "3px 8px", fontWeight: 700 }}>👁 Læsetilstand</span>}
             <button onClick={handleUnlink} style={{ padding: "7px 14px", background: "rgba(255,255,255,0.1)", color: "white", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
               Fjern link
             </button>
-            <button onClick={() => setShowSettings(s => !s)} style={{ padding: "7px 14px", background: showSettings ? C.yellow : "rgba(255,255,255,0.1)", color: showSettings ? C.dark : "white", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            {!readOnly && <button onClick={() => setShowSettings(s => !s)} style={{ padding: "7px 14px", background: showSettings ? C.yellow : "rgba(255,255,255,0.1)", color: showSettings ? C.dark : "white", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
               ⚙ Indstillinger
-            </button>
+            </button>}
           </div>
         </div>
 
@@ -459,6 +519,30 @@ export default function Dashboard() {
                 Logget ind som <strong style={{ color: C.dark }}>{userName || "—"}</strong>
                 <button onClick={() => { setNameInput(userName); setShowNamePrompt(true); }} style={{ marginLeft: 8, background: "none", border: "none", color: C.teal, cursor: "pointer", fontSize: 11 }}>Skift navn</button>
               </div>
+              <div style={{ marginBottom: 10 }}>
+                <button onClick={handleLiveCheck} disabled={liveCheckLoading} style={{ background: "none", border: "none", color: C.teal, cursor: liveCheckLoading ? "default" : "pointer", fontSize: 12, padding: 0 }}>
+                  {liveCheckLoading ? "Tjekker…" : "🔄 Tjek hvem der har det åbent"}
+                </button>
+                {liveCheckResult !== null && (
+                  <div style={{ marginTop: 6 }}>
+                    {liveCheckResult.length === 0
+                      ? <span style={{ fontSize: 12, color: C.muted }}>✅ Ingen aktive sessioner fundet.</span>
+                      : liveCheckResult.map(s => {
+                          const since = new Date(s.checkedOutAt.replace(" ", "T")).toLocaleString("da-DK", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+                          const isMe = s.userName === userName;
+                          return (
+                            <div key={s.id} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                              <span style={{ fontSize: 11 }}>🟢</span>
+                              <span style={{ fontSize: 12, color: C.dark, fontWeight: isMe ? 700 : 400 }}>
+                                {s.userName}{isMe ? " (dig)" : ""} — siden {since}
+                              </span>
+                            </div>
+                          );
+                        })
+                    }
+                  </div>
+                )}
+              </div>
               {showSessionLog && (
                 <div style={{ maxHeight: 200, overflowY: "auto" }}>
                   {sessionLog.length === 0 && <p style={{ fontSize: 12, color: C.muted }}>Ingen log endnu.</p>}
@@ -513,7 +597,7 @@ export default function Dashboard() {
 
       {/* View tabs */}
       <div style={{ background: "white", borderBottom: `2px solid ${C.mid}`, display: "flex", flexShrink: 0 }}>
-        {([ ["tasks","📋 Opgaver"], ["timeline","📅 Tidslinje"], ["milestones","🏁 Milepæle"], ["owners","👤 Ansvarlige"] ] as [ViewType, string][]).map(([v, label]) => (
+        {([ ["tasks","📋 Opgaver"], ["timeline","📅 Tidslinje"], ["milestones","🏁 Milepæle"], ["owners","👤 Ansvarlige"], ["recent","🕐 Seneste"] ] as [ViewType, string][]).map(([v, label]) => (
           <button key={v} onClick={() => setView(v)} style={{
             padding: "10px 22px", border: "none", background: "none", cursor: "pointer",
             fontFamily: "inherit", fontSize: 13, fontWeight: 600,
@@ -598,10 +682,10 @@ export default function Dashboard() {
                     <span style={{ fontSize: 16, fontWeight: 700, color: C.dark }}>{activeTrackMeta.label}</span>
                     <span style={{ fontSize: 12, color: C.muted }}>({currentTasks.length})</span>
                   </div>
-                  <button
+                  {!readOnly && <button
                     onClick={() => setEditTask({ id: "__new__", track: activeTrack, text: "", owners: [], deadline: "", done: false })}
                     style={{ padding: "7px 16px", background: activeTrackMeta.color, color: "white", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}
-                  >+ Tilføj opgave</button>
+                  >+ Tilføj opgave</button>}
                 </div>
               )}
 
@@ -612,16 +696,16 @@ export default function Dashboard() {
               )}
 
               {currentTasks.map(task => (
-                <div key={task.id} onClick={() => setEditTask(task)} style={{
+                <div key={task.id} onClick={readOnly ? undefined : () => setEditTask(task)} style={{
                   display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 14px",
                   marginBottom: 7, background: "white", borderRadius: 8,
                   border: `1px solid ${task.done ? (activeTrackMeta?.color ?? C.teal) + "55" : C.mid}`,
-                  opacity: task.done ? 0.6 : 1, transition: "opacity 0.2s", cursor: "pointer",
+                  opacity: task.done ? 0.6 : 1, transition: "opacity 0.2s", cursor: readOnly ? "default" : "pointer",
                 }}>
-                  <button onClick={e => { e.stopPropagation(); toggleTask(task.id); }} style={{
+                  <button onClick={readOnly ? undefined : e => { e.stopPropagation(); toggleTask(task.id); }} style={{
                     width: 20, height: 20, borderRadius: 4, border: `2px solid ${task.done ? (activeTrackMeta?.color ?? C.teal) : "#bbb"}`,
                     background: task.done ? (activeTrackMeta?.color ?? C.teal) : "white", flexShrink: 0, marginTop: 1,
-                    cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                    cursor: readOnly ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center",
                   }}>
                     {task.done && <span style={{ color: "white", fontSize: 11, fontWeight: 700 }}>✓</span>}
                   </button>
@@ -631,8 +715,9 @@ export default function Dashboard() {
                       {task.owners.map(o => <span key={o.id} style={{ fontSize: 11, color: C.muted, background: C.light, borderRadius: 4, padding: "1px 6px" }}>👤 {o.name}</span>)}
                       {task.deadline && <span style={{ fontSize: 11, color: C.bordeaux, fontWeight: 600 }}>⏰ {new Date(task.deadline).toLocaleDateString("da-DK", { day: "numeric", month: "short" })}</span>}
                     </div>
+                    {task.url && <a href={task.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={{ display: "inline-flex", alignItems: "center", gap: 3, marginTop: 3, fontSize: 11, color: C.teal, textDecoration: "none" }}>🔗 {urlHost(task.url)}</a>}
                   </div>
-                  <button onClick={e => { e.stopPropagation(); setEditTask(task); }} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 14, padding: "2px 5px" }}>✏️</button>
+                  {!readOnly && <button onClick={e => { e.stopPropagation(); setEditTask(task); }} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 14, padding: "2px 5px" }}>✏️</button>}
                 </div>
               ))}
             </div>
@@ -642,10 +727,10 @@ export default function Dashboard() {
                 <span style={{ fontSize: 16, fontWeight: 700, color: C.dark }}>
                   Alle opgaver <span style={{ fontSize: 12, color: C.muted, fontWeight: 400 }}>({allTasksSorted.length})</span>
                 </span>
-                <button
+                {!readOnly && <button
                   onClick={() => setEditTask({ id: "__new__", track: tracks[0]?.id ?? "", text: "", owners: [], deadline: "", done: false })}
                   style={{ padding: "7px 16px", background: C.teal, color: "white", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}
-                >+ Tilføj opgave</button>
+                >+ Tilføj opgave</button>}
               </div>
 
               {allTasksSorted.length === 0 && (
@@ -659,16 +744,16 @@ export default function Dashboard() {
                 const tIcon  = trackIcon(task.track);
                 const tLabel = tracks.find(t => t.id === task.track)?.label ?? task.track;
                 return (
-                  <div key={task.id} onClick={() => setEditTask(task)} style={{
+                  <div key={task.id} onClick={readOnly ? undefined : () => setEditTask(task)} style={{
                     display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 14px",
                     marginBottom: 7, background: "white", borderRadius: 8,
                     border: `1px solid ${task.done ? tColor + "55" : C.mid}`,
-                    opacity: task.done ? 0.6 : 1, transition: "opacity 0.2s", cursor: "pointer",
+                    opacity: task.done ? 0.6 : 1, transition: "opacity 0.2s", cursor: readOnly ? "default" : "pointer",
                   }}>
-                    <button onClick={e => { e.stopPropagation(); toggleTask(task.id); }} style={{
+                    <button onClick={readOnly ? undefined : e => { e.stopPropagation(); toggleTask(task.id); }} style={{
                       width: 20, height: 20, borderRadius: 4, border: `2px solid ${task.done ? tColor : "#bbb"}`,
                       background: task.done ? tColor : "white", flexShrink: 0, marginTop: 1,
-                      cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                      cursor: readOnly ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center",
                     }}>
                       {task.done && <span style={{ color: "white", fontSize: 11, fontWeight: 700 }}>✓</span>}
                     </button>
@@ -682,8 +767,9 @@ export default function Dashboard() {
                         {task.owners.map(o => <span key={o.id} style={{ fontSize: 11, color: C.muted, background: C.light, borderRadius: 4, padding: "1px 6px" }}>👤 {o.name}</span>)}
                         {task.deadline && <span style={{ fontSize: 11, color: C.bordeaux, fontWeight: 600 }}>⏰ {new Date(task.deadline).toLocaleDateString("da-DK", { day: "numeric", month: "short" })}</span>}
                       </div>
+                      {task.url && <a href={task.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={{ display: "inline-flex", alignItems: "center", gap: 3, marginTop: 3, fontSize: 11, color: C.teal, textDecoration: "none" }}>🔗 {urlHost(task.url)}</a>}
                     </div>
-                    <button onClick={e => { e.stopPropagation(); setEditTask(task); }} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 14, padding: "2px 5px" }}>✏️</button>
+                    {!readOnly && <button onClick={e => { e.stopPropagation(); setEditTask(task); }} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 14, padding: "2px 5px" }}>✏️</button>}
                   </div>
                 );
               })}
@@ -727,13 +813,13 @@ export default function Dashboard() {
                     {months.map((m, i) => <div key={i} style={{ position: "absolute", left: `${toPct(m.toISOString().slice(0, 10))}%`, top: 0, bottom: 0, width: 1, background: `${t.color}20` }} />)}
                     <div style={{ position: "absolute", left: `${toPct(todayStr)}%`, top: 0, bottom: 0, width: 2, background: C.bordeaux, opacity: 0.5, zIndex: 1, borderRadius: 1 }} />
                     {tMs.map(ms => (
-                      <div key={ms.id} title={ms.label} onClick={() => setEditMS(ms)} style={{ position: "absolute", left: `${toPct(ms.date)}%`, top: 3, transform: "translateX(-50%)", fontSize: 16, cursor: "pointer", zIndex: 3 }}>🏁</div>
+                      <div key={ms.id} title={ms.label} onClick={readOnly ? undefined : () => setEditMS(ms)} style={{ position: "absolute", left: `${toPct(ms.date)}%`, top: 3, transform: "translateX(-50%)", fontSize: 16, cursor: readOnly ? "default" : "pointer", zIndex: 3 }}>🏁</div>
                     ))}
                     {laned.map(({ item: task, lane }) => (
                       <div key={task.id}
                         title={`${task.text}\n${task.owners.map(o => "👤 " + o.name).join(", ")}\n⏰ ${task.deadline}`}
-                        onClick={() => setEditTask(task)}
-                        style={{ position: "absolute", left: `${toPct(task.deadline)}%`, top: msZone + LANE_PAD + lane * LANE_H + 4, transform: "translateX(-50%)", background: task.done ? t.color : "white", border: `2px solid ${t.color}`, color: task.done ? "white" : t.color, fontSize: 10, fontWeight: 700, borderRadius: 5, padding: "2px 7px", cursor: "pointer", whiteSpace: "nowrap", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", boxShadow: "0 1px 4px rgba(0,0,0,0.1)", zIndex: 2 }}>
+                        onClick={readOnly ? undefined : () => setEditTask(task)}
+                        style={{ position: "absolute", left: `${toPct(task.deadline)}%`, top: msZone + LANE_PAD + lane * LANE_H + 4, transform: "translateX(-50%)", background: task.done ? t.color : "white", border: `2px solid ${t.color}`, color: task.done ? "white" : t.color, fontSize: 10, fontWeight: 700, borderRadius: 5, padding: "2px 7px", cursor: readOnly ? "default" : "pointer", whiteSpace: "nowrap", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", boxShadow: "0 1px 4px rgba(0,0,0,0.1)", zIndex: 2 }}>
                         {task.text.slice(0, 24)}{task.text.length > 24 ? "…" : ""}
                       </div>
                     ))}
@@ -751,7 +837,7 @@ export default function Dashboard() {
         <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
             <span style={{ fontSize: 16, fontWeight: 700, color: C.dark }}>Nøglemilepæle</span>
-            <button onClick={() => setEditMS({ id: "__new__", date: "", label: "", track: tracks[0]?.id ?? "", done: false })} style={{ padding: "7px 16px", background: C.teal, color: "white", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Tilføj milepæl</button>
+            {!readOnly && <button onClick={() => setEditMS({ id: "__new__", date: "", label: "", track: tracks[0]?.id ?? "", done: false })} style={{ padding: "7px 16px", background: C.teal, color: "white", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Tilføj milepæl</button>}
           </div>
           {[...milestones].sort((a, b) => a.date > b.date ? 1 : -1).map((m, i, arr) => {
             const color = trackColor(m.track);
@@ -761,14 +847,14 @@ export default function Dashboard() {
                   {m.date ? new Date(m.date).toLocaleDateString("da-DK", { day: "numeric", month: "short" }) : "—"}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-                  <button onClick={() => toggleMilestone(m.id)} style={{ width: 22, height: 22, borderRadius: "50%", border: `2px solid ${color}`, background: m.done ? color : "white", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <button onClick={readOnly ? undefined : () => toggleMilestone(m.id)} style={{ width: 22, height: 22, borderRadius: "50%", border: `2px solid ${color}`, background: m.done ? color : "white", cursor: readOnly ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                     {m.done && <span style={{ color: "white", fontSize: 11, fontWeight: 700 }}>✓</span>}
                   </button>
                   {i < arr.length - 1 && <div style={{ width: 2, height: 26, background: C.mid }} />}
                 </div>
                 <div style={{ flex: 1, background: "white", borderRadius: 8, padding: "8px 12px", fontSize: 13, color: m.done ? C.muted : C.dark, border: `1px solid ${m.done ? color + "50" : C.mid}`, textDecoration: m.done ? "line-through" : "none", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span>{trackIcon(m.track)} {m.label}</span>
-                  <button onClick={() => setEditMS(m)} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 14, padding: "0 4px", flexShrink: 0 }}>✏️</button>
+                  {!readOnly && <button onClick={() => setEditMS(m)} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 14, padding: "0 4px", flexShrink: 0 }}>✏️</button>}
                 </div>
               </div>
             );
@@ -836,8 +922,8 @@ export default function Dashboard() {
                       <span style={{ fontSize: 11, color: C.muted, fontWeight: 400 }}>({trackTasks.length})</span>
                     </div>
                     {trackTasks.map(task => (
-                      <div key={task.id} onClick={() => setEditTask(task)} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 14px", marginBottom: 7, background: "white", borderRadius: 8, border: `1px solid ${task.done ? t.color + "55" : C.mid}`, opacity: task.done ? 0.6 : 1, cursor: "pointer" }}>
-                        <button onClick={e => { e.stopPropagation(); toggleTask(task.id); }} style={{ width: 20, height: 20, borderRadius: 4, border: `2px solid ${task.done ? t.color : "#bbb"}`, background: task.done ? t.color : "white", flexShrink: 0, marginTop: 1, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <div key={task.id} onClick={readOnly ? undefined : () => setEditTask(task)} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 14px", marginBottom: 7, background: "white", borderRadius: 8, border: `1px solid ${task.done ? t.color + "55" : C.mid}`, opacity: task.done ? 0.6 : 1, cursor: readOnly ? "default" : "pointer" }}>
+                        <button onClick={readOnly ? undefined : e => { e.stopPropagation(); toggleTask(task.id); }} style={{ width: 20, height: 20, borderRadius: 4, border: `2px solid ${task.done ? t.color : "#bbb"}`, background: task.done ? t.color : "white", flexShrink: 0, marginTop: 1, cursor: readOnly ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
                           {task.done && <span style={{ color: "white", fontSize: 11, fontWeight: 700 }}>✓</span>}
                         </button>
                         <div style={{ flex: 1 }}>
@@ -848,8 +934,9 @@ export default function Dashboard() {
                             ))}
                             {task.deadline && <span style={{ fontSize: 11, color: C.bordeaux, fontWeight: 600 }}>⏰ {new Date(task.deadline).toLocaleDateString("da-DK", { day: "numeric", month: "short" })}</span>}
                           </div>
+                          {task.url && <a href={task.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={{ display: "inline-flex", alignItems: "center", gap: 3, marginTop: 3, fontSize: 11, color: C.teal, textDecoration: "none" }}>🔗 {urlHost(task.url)}</a>}
                         </div>
-                        <button onClick={e => { e.stopPropagation(); setEditTask(task); }} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 14, padding: "2px 5px" }}>✏️</button>
+                        {!readOnly && <button onClick={e => { e.stopPropagation(); setEditTask(task); }} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 14, padding: "2px 5px" }}>✏️</button>}
                       </div>
                     ))}
                   </div>
@@ -859,6 +946,61 @@ export default function Dashboard() {
           </div>
         );
       })()}
+
+      {/* ── SENESTE ── */}
+      {view === "recent" && (
+        <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px" }}>
+          {recentTasks.length === 0 && (
+            <div style={{ textAlign: "center", color: C.muted, marginTop: 48, fontSize: 13 }}>
+              Ingen aktivitet endnu — opgaver vises her når de oprettes eller ændres.
+            </div>
+          )}
+          {groupedRecent.map(({ dateLabel, tasks: group }) => (
+            <div key={dateLabel} style={{ marginBottom: 24 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                <div style={{ width: 3, height: 14, background: C.mid, borderRadius: 2, flexShrink: 0 }} />
+                <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: 0.8 }}>{dateLabel}</span>
+                <div style={{ flex: 1, height: 1, background: C.mid }} />
+              </div>
+              {group.map(task => {
+                const tColor = trackColor(task.track);
+                const tIcon  = trackIcon(task.track);
+                const tLabel = tracks.find(t => t.id === task.track)?.label ?? task.track;
+                const eventTs = task.updatedAt ?? task.createdAt ?? "";
+                const timeStr = eventTs
+                  ? new Date(eventTs.replace(" ", "T")).toLocaleTimeString("da-DK", { hour: "2-digit", minute: "2-digit" })
+                  : "";
+                const badge = task.done
+                  ? { label: "✓ Afsluttet", bg: C.yellow, color: C.dark }
+                  : task.updatedAt
+                    ? { label: "✏ Opdateret", bg: C.teal + "22", color: C.teal }
+                    : { label: "✦ Ny", bg: "#e8f5e9", color: "#2e7d32" };
+                return (
+                  <div key={task.id} onClick={() => setEditTask(task)} style={{
+                    display: "flex", gap: 12, padding: "10px 14px", marginBottom: 6,
+                    background: "white", borderRadius: 8, border: `1px solid ${C.mid}`,
+                    opacity: task.done ? 0.75 : 1, cursor: "pointer",
+                  }}>
+                    <div style={{ width: 44, flexShrink: 0, fontSize: 11, color: C.muted, paddingTop: 2, textAlign: "right" }}>{timeStr}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: tColor }}>{tIcon} {tLabel}</span>
+                        <span style={{ fontSize: 10, fontWeight: 600, borderRadius: 10, padding: "2px 7px", background: badge.bg, color: badge.color }}>{badge.label}</span>
+                      </div>
+                      <div style={{ fontSize: 13, color: C.dark, textDecoration: task.done ? "line-through" : "none", lineHeight: 1.45 }}>{task.text}</div>
+                      <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                        {task.owners.map(o => <span key={o.id} style={{ fontSize: 11, color: C.muted, background: C.light, borderRadius: 4, padding: "1px 6px" }}>👤 {o.name}</span>)}
+                        {task.deadline && <span style={{ fontSize: 11, color: C.bordeaux, fontWeight: 600 }}>⏰ {new Date(task.deadline).toLocaleDateString("da-DK", { day: "numeric", month: "short" })}</span>}
+                      </div>
+                      {task.url && <a href={task.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={{ display: "inline-flex", alignItems: "center", gap: 3, marginTop: 3, fontSize: 11, color: C.teal, textDecoration: "none" }}>🔗 {urlHost(task.url)}</a>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
 
       {editTask && (
         <TaskModal

@@ -218,7 +218,7 @@ export function deleteResponsible(db: Database, id: string): void {
 
 export function getTasks(db: Database): Task[] {
   const res = db.exec(`
-    SELECT t.id, t.track_id, t.text, t.deadline, t.done,
+    SELECT t.id, t.track_id, t.text, t.deadline, t.done, t.created_at, t.updated_at, t.url,
            r.id AS r_id, r.name AS r_name
     FROM tasks t
     LEFT JOIN task_responsible tr ON tr.task_id = t.id
@@ -229,8 +229,8 @@ export function getTasks(db: Database): Task[] {
 
   const taskMap = new Map<string, Task>();
   for (const row of res[0].values) {
-    const [id, track_id, text, deadline, done, r_id, r_name] = row as [
-      string, string, string, string | null, number, string | null, string | null
+    const [id, track_id, text, deadline, done, created_at, updated_at, url, r_id, r_name] = row as [
+      string, string, string, string | null, number, string | null, string | null, string | null, string | null, string | null
     ];
     if (!taskMap.has(id)) {
       taskMap.set(id, {
@@ -239,7 +239,10 @@ export function getTasks(db: Database): Task[] {
         text,
         deadline: deadline ?? "",
         done: done === 1,
+        url: url ?? undefined,
         owners: [],
+        createdAt: created_at ?? undefined,
+        updatedAt: updated_at ?? undefined,
       });
     }
     if (r_id && r_name) {
@@ -265,16 +268,16 @@ export function getTasks(db: Database): Task[] {
 
 export function insertTask(db: Database, task: Omit<Task, "notes">): void {
   db.run(
-    "INSERT INTO tasks (id, track_id, text, deadline, done) VALUES (?,?,?,?,?)",
-    [task.id, task.track, task.text, task.deadline || null, task.done ? 1 : 0]
+    "INSERT INTO tasks (id, track_id, text, deadline, done, url) VALUES (?,?,?,?,?,?)",
+    [task.id, task.track, task.text, task.deadline || null, task.done ? 1 : 0, task.url || null]
   );
   syncTaskResponsible(db, task.id, task.owners);
 }
 
 export function updateTask(db: Database, task: Omit<Task, "notes">): void {
   db.run(
-    "UPDATE tasks SET track_id=?, text=?, deadline=?, done=? WHERE id=?",
-    [task.track, task.text, task.deadline || null, task.done ? 1 : 0, task.id]
+    "UPDATE tasks SET track_id=?, text=?, deadline=?, done=?, url=?, updated_at=datetime('now') WHERE id=?",
+    [task.track, task.text, task.deadline || null, task.done ? 1 : 0, task.url || null, task.id]
   );
   syncTaskResponsible(db, task.id, task.owners);
 }
@@ -352,6 +355,11 @@ export function migrateDatabase(db: Database): void {
       checked_in_at TEXT
     )
   `);
+  const cols = db.exec("PRAGMA table_info(tasks)")[0]?.values ?? [];
+  const hasUpdatedAt = (cols as unknown[][]).some(r => r[1] === "updated_at");
+  if (!hasUpdatedAt) db.run("ALTER TABLE tasks ADD COLUMN updated_at TEXT");
+  const hasUrl = (cols as unknown[][]).some(r => r[1] === "url");
+  if (!hasUrl) db.run("ALTER TABLE tasks ADD COLUMN url TEXT");
 }
 
 function nowUtc(): string {

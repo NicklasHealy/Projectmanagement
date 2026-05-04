@@ -14,6 +14,16 @@ interface Props {
   onClose: () => void;
 }
 
+function renderNoteText(text: string) {
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  const parts = text.split(urlRegex);
+  return parts.map((part, i) =>
+    urlRegex.test(part)
+      ? <a key={i} href={part} target="_blank" rel="noopener noreferrer" style={{ color: "#006564", textDecoration: "underline", wordBreak: "break-all" }}>{part}</a>
+      : part
+  );
+}
+
 function formatTs(ts: string) {
   const d = new Date(ts);
   return d.toLocaleDateString("da-DK", { day: "2-digit", month: "2-digit", year: "numeric" })
@@ -27,6 +37,7 @@ export default function TaskModal({ task, tracks, responsible, onSave, onDelete,
   const [trackId, setTrackId]   = useState(task.track ?? tracks[0]?.id ?? "");
   const [deadline, setDeadline] = useState(task.deadline ?? "");
   const [done, setDone]         = useState(task.done ?? false);
+  const [url, setUrl]           = useState(task.url ?? "");
 
   // Owner names (may include names not yet in DB)
   const [selectedOwners, setSelectedOwners] = useState<string[]>(
@@ -55,7 +66,7 @@ export default function TaskModal({ task, tracks, responsible, onSave, onDelete,
 
   const handleSave = () => {
     if (!text.trim()) return;
-    onSave({ id: task.id, track: trackId, text: text.trim(), deadline, done }, selectedOwners);
+    onSave({ id: task.id, track: trackId, text: text.trim(), deadline, done, url: url.trim() || undefined }, selectedOwners);
   };
 
   // Suggestions: responsible names not yet selected, filtered by input
@@ -131,6 +142,22 @@ export default function TaskModal({ task, tracks, responsible, onSave, onDelete,
         <input type="date" className={inputCls} value={deadline} onChange={e => setDeadline(e.target.value)} />
       </Field>
 
+      <Field label="Link / URL">
+        <input
+          type="url"
+          className={inputCls}
+          value={url}
+          onChange={e => setUrl(e.target.value)}
+          placeholder="https://…"
+        />
+        {url.trim() && (
+          <a href={url.trim()} target="_blank" rel="noopener noreferrer"
+            style={{ display: "inline-block", marginTop: 4, fontSize: 11, color: "#006564", textDecoration: "underline", wordBreak: "break-all" }}>
+            🔗 Åbn link
+          </a>
+        )}
+      </Field>
+
       <Field label="Status">
         <label className="flex items-center gap-2 text-sm cursor-pointer text-[#1D3E47]">
           <input type="checkbox" checked={done} onChange={e => setDone(e.target.checked)} className="accent-[#006564]" />
@@ -162,7 +189,7 @@ export default function TaskModal({ task, tracks, responsible, onSave, onDelete,
               <div key={n.id} className="bg-[#f4f8f9] rounded-lg px-3 py-2 text-sm text-[#1D3E47] flex justify-between items-start gap-2">
                 <div>
                   <div className="text-[10px] font-bold text-[#6b8b90] mb-0.5">{formatTs(n.ts)}</div>
-                  <div style={{ whiteSpace: "pre-wrap" }}>{n.text}</div>
+                  <div style={{ whiteSpace: "pre-wrap" }}>{renderNoteText(n.text)}</div>
                 </div>
                 <button onClick={() => onRemoveNote(n.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#6b8b90", fontSize: 14, flexShrink: 0 }}>×</button>
               </div>
