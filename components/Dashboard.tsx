@@ -26,6 +26,12 @@ type ViewType = "tasks" | "timeline" | "milestones" | "owners";
 const LANE_H = 28;
 const LANE_PAD = 8;
 
+function matchesSearch(task: Task, q: string): boolean {
+  if (!q.trim()) return true;
+  const lower = q.toLowerCase();
+  return task.text.toLowerCase().includes(lower) || task.owners.some(o => o.name.toLowerCase().includes(lower));
+}
+
 function assignLanes<T>(items: T[], getPct: (t: T) => number, thresholdPct = 13): { item: T; lane: number }[] {
   const sorted = [...items].sort((a, b) => getPct(a) - getPct(b));
   const laneEnds: number[] = [];
@@ -69,6 +75,7 @@ export default function Dashboard() {
   const [renameResponsibleId, setRenameResponsibleId] = useState<string | null>(null);
   const [renameResponsibleVal, setRenameResponsibleVal] = useState("");
   const [newResponsibleVal, setNewResponsibleVal] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Checkout-state
   const [sessionId, setSessionId]         = useState<number | null>(null);
@@ -310,6 +317,7 @@ export default function Dashboard() {
 
   const currentTasks = tasks
     .filter(t => t.track === activeTrack)
+    .filter(t => matchesSearch(t, searchQuery))
     .sort((a, b) => {
       if (a.done !== b.done) return a.done ? 1 : -1;
       if (!a.deadline && !b.deadline) return 0;
@@ -319,6 +327,7 @@ export default function Dashboard() {
 
   const allTasksSorted = tasks
     .filter(t => selectedOwner === "" || t.owners.some(o => o.name === selectedOwner))
+    .filter(t => matchesSearch(t, searchQuery))
     .sort((a, b) => {
       if (a.done !== b.done) return a.done ? 1 : -1;
       if (!a.deadline && !b.deadline) return 0;
@@ -536,6 +545,18 @@ export default function Dashboard() {
               ))}
             </select>
           )}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: "auto", border: `1px solid ${C.mid}`, borderRadius: 6, padding: "5px 10px", background: "white" }}>
+            <span style={{ fontSize: 13, color: C.muted }}>🔍</span>
+            <input
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Søg i opgaver…"
+              style={{ border: "none", outline: "none", fontSize: 12, color: C.dark, background: "transparent", width: 180 }}
+            />
+            {searchQuery && (
+              <button onClick={() => setSearchQuery("")} style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 13, padding: 0, lineHeight: 1 }}>×</button>
+            )}
+          </div>
         </div>
       )}
 
@@ -585,7 +606,9 @@ export default function Dashboard() {
               )}
 
               {currentTasks.length === 0 && (
-                <div style={{ textAlign: "center", color: C.muted, marginTop: 48, fontSize: 13 }}>Ingen opgaver endnu — tilføj din første!</div>
+                <div style={{ textAlign: "center", color: C.muted, marginTop: 48, fontSize: 13 }}>
+                  {searchQuery.trim() ? "Ingen opgaver matcher søgningen." : "Ingen opgaver endnu — tilføj din første!"}
+                </div>
               )}
 
               {currentTasks.map(task => (
@@ -626,7 +649,9 @@ export default function Dashboard() {
               </div>
 
               {allTasksSorted.length === 0 && (
-                <div style={{ textAlign: "center", color: C.muted, marginTop: 48, fontSize: 13 }}>Ingen opgaver fundet.</div>
+                <div style={{ textAlign: "center", color: C.muted, marginTop: 48, fontSize: 13 }}>
+                  {searchQuery.trim() ? "Ingen opgaver matcher søgningen." : "Ingen opgaver fundet."}
+                </div>
               )}
 
               {allTasksSorted.map(task => {
